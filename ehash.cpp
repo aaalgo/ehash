@@ -54,6 +54,14 @@ void ensure_dir (fs::path const &dir) {
     }
 }
 
+bool is_fmt_string (string const &path) {
+    auto off = path.find("{");
+    if (off == path.npos) return false;
+    off = path.find("}", off);
+    if (off == path.npos) return false;
+    return true;
+}
+
 int main (int argc, char *argv[]) {
     int number = 100;
     char line_delim = '\n';
@@ -125,7 +133,14 @@ int main (int argc, char *argv[]) {
             stream = fopen(input.c_str(), "r");
         }
         else {
-            string cmd = fmt::format("{} {}", loader, input);
+            //string cmd = fmt::format("{} {}", loader, input);
+            string cmd;
+            if (is_fmt_string(loader)) {
+                cmd = fmt::format(loader, input);
+            }
+            else {
+                cmd = fmt::format("{} {}", loader, input);
+            }
             spdlog::info("streaming {}", cmd);
             stream = popen(cmd.c_str(), "r");
         }
