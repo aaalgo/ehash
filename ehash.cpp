@@ -197,6 +197,10 @@ int main (int argc, char *argv[]) {
     spdlog::set_level(spdlog::level::level_enum(log_level));
     spdlog::debug("log level: {}", log_level);
 
+    if (reducer.size() && !sort) {
+        spdlog::error("reducer specified but not sorting, abort.");
+    }
+
     if (threads <= 0) {
         threads = std::thread::hardware_concurrency();
         if (threads <= 0) {
