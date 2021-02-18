@@ -8,7 +8,6 @@
 #include <vector>
 #include <tuple>
 #include <algorithm>
-#include <glob/glob.hpp>
 #include <CLI/CLI.hpp>
 #include <cxxpool.h>
 #define FMT_HEADER_ONLY
