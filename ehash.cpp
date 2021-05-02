@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <atomic>
 #include <iostream>
 #include <fstream>
 #include <functional>
@@ -15,6 +16,7 @@
 #define SPDLOG_FMT_EXTERNAL
 #include <spdlog/spdlog.h>
 
+using std::atomic;
 using std::string;
 using std::string_view;
 using std::vector;
@@ -23,9 +25,15 @@ namespace fs=std::filesystem;
 
 struct FileTask {
     fs::path path;
-    size_t size;    // automatically determined file size
+    ssize_t size;    // automatically determined file size
 
-    FileTask (string const &p): path(p), size(fs::file_size(p)) {
+    FileTask (string const &p, bool sort): path(p) {
+        if (sort) {
+            size = fs::file_size(p);
+        }
+        else {
+            size = -1;
+        }
     }
 };
 
@@ -37,7 +45,7 @@ class FileTasks: public vector<FileTask> {
 public:
     FileTasks (vector<string> const &paths, bool sort = true) {
         for (auto const &path: paths) {
-            emplace_back(path);
+            emplace_back(path, sort);
         }
         if (sort) {
             std::sort(begin(), end(), bigger_file_first);
@@ -157,6 +165,31 @@ void ensure_dir (fs::path const &dir) {
     }
 }
 
+class Stats {
+    atomic<size_t> lines = 0;
+    atomic<size_t> bytes = 0;
+    int interval = 0;
+public:
+    Stats (int interval_): interval(interval_) {
+    }
+
+    ~Stats () {
+        spdlog::info("{} lines {} bytes loaded in total.", lines, bytes);
+    }
+
+    void update (int l, ssize_t s) {
+        size_t ls = lines.fetch_add(l);
+        size_t ss = bytes.fetch_add(s);
+        if (interval > 0) {
+            ls += l;
+            ss += s;
+            if (ls % interval == 0) {
+                spdlog::info("{} lines {} bytes, loading...", ls, ss);
+            }
+        }
+    }
+};
+
 int main (int argc, char *argv[]) {
     int partitions = 100;
     char line_delim = '\n';
@@ -172,6 +205,7 @@ int main (int argc, char *argv[]) {
     int log_level = spdlog::level::info;
     int dry = 0;
     int sort = 0;
+    int interval = 0;
 
     {
         CLI::App cli{"ehash"};
@@ -180,10 +214,12 @@ int main (int argc, char *argv[]) {
         cli.add_option("--format", output_format, "output filename format (part-{:0>5d})");
         cli.add_option("-o,--output", output_dir, "output directory (ehash_out)");
         cli.add_option("-b,--batch", batch, "batch (default empty)");
+        cli.add_option("-k,--key", key, "hash key");
         cli.add_option("-l,--loader", loader, "loader (default empty)");
         cli.add_option("-c,--combiner", combiner, "combiner (default empty)");
         cli.add_option("-r,--reducer", reducer, "reducer (default empty)");
         cli.add_option("-t,--threads", threads, "number of threads (0 for auto)");
+        cli.add_option("-i,--interval", interval, "report every this number of lines (0)");
         cli.add_option("input", inputs, "input directories");
         cli.add_flag_function("-v", [&log_level](int v){ log_level -= v;}, "verbose");
         cli.add_flag_function("-V", [&log_level](int v){ log_level += v;}, "less verbose");
@@ -220,7 +256,7 @@ int main (int argc, char *argv[]) {
 
     if (inputs.empty() || dry) return 0;
 
-    FileTasks input_tasks(inputs);
+    FileTasks input_tasks(inputs, loader.empty());
 
     ensure_dir(output_dir);
     vector<string> output_paths;
@@ -241,6 +277,7 @@ int main (int argc, char *argv[]) {
         sinks.emplace_back(std::make_unique<sync_sink>(output_path.native(), combiner));
     }
 
+    Stats stats(interval);
     run_in_parallel(input_tasks, threads, [&](FileTask const &task) {
         source source(task.path, loader);
         char *lineptr = NULL;
@@ -250,6 +287,7 @@ int main (int argc, char *argv[]) {
             if (r <= 0) break;
             int part = HASH(extract_key(lineptr, lineptr+r, key, field_delim)) % sinks.size();
             sinks[part]->write(lineptr, r);
+            stats.update(1, r);
         }
         free(lineptr);
     });
