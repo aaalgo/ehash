@@ -252,6 +252,7 @@ int main (int argc, char *argv[]) {
         }
     }
 
+    spdlog::info("aaalgo ehash, https://github.com/aaalgo/ehash");
     spdlog::info("{} inputs found.", inputs.size());
 
     if (inputs.empty() || dry) return 0;
