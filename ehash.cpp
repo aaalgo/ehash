@@ -9,6 +9,7 @@
 #include <vector>
 #include <tuple>
 #include <algorithm>
+#include <chrono>
 #include <CLI/CLI.hpp>
 #include <cxxpool.h>
 #define FMT_HEADER_ONLY
@@ -169,12 +170,26 @@ class Stats {
     atomic<size_t> lines = 0;
     atomic<size_t> bytes = 0;
     int interval = 0;
+    size_t total_lines = 0;
+    std::chrono::steady_clock::time_point begin;
+
+    void report () const {
+        double seconds = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count() / 1000000.0;
+        double MB = 1.0 * bytes / 0x100000;
+        if (total_lines > 0) {
+            spdlog::info("loaded {} lines {} bytes in {:.1f}s at {:.1f} MB/s, {:.1f}% done.", lines, bytes, seconds, MB/seconds, 100.0 * lines/total_lines);
+        }
+        else {
+            spdlog::info("loaded {} lines {} bytes in {:.1f}s at {:.1f} MB/s.", lines, bytes, seconds, MB/seconds);
+        }
+    }
+
 public:
-    Stats (int interval_): interval(interval_) {
+    Stats (int interval_, size_t total_): interval(interval_), total_lines(total_), begin(std::chrono::steady_clock::now()) {
     }
 
     ~Stats () {
-        spdlog::info("{} lines {} bytes loaded in total.", lines, bytes);
+        report();
     }
 
     void update (int l, ssize_t s) {
@@ -184,7 +199,7 @@ public:
             ls += l;
             ss += s;
             if (ls % interval == 0) {
-                spdlog::info("{} lines {} bytes, loading...", ls, ss);
+                report();
             }
         }
     }
@@ -206,6 +221,7 @@ int main (int argc, char *argv[]) {
     int dry = 0;
     int sort = 0;
     int interval = 0;
+    size_t progress_total_lines = 0;
 
     {
         CLI::App cli{"ehash"};
@@ -220,6 +236,7 @@ int main (int argc, char *argv[]) {
         cli.add_option("-r,--reducer", reducer, "reducer (default empty)");
         cli.add_option("-t,--threads", threads, "number of threads (0 for auto)");
         cli.add_option("-i,--interval", interval, "report every this number of lines (0)");
+        cli.add_option("-n,--progress_total_lines", progress_total_lines, "");
         cli.add_option("input", inputs, "input directories");
         cli.add_flag_function("-v", [&log_level](int v){ log_level -= v;}, "verbose");
         cli.add_flag_function("-V", [&log_level](int v){ log_level += v;}, "less verbose");
@@ -278,7 +295,7 @@ int main (int argc, char *argv[]) {
         sinks.emplace_back(std::make_unique<sync_sink>(output_path.native(), combiner));
     }
 
-    Stats stats(interval);
+    Stats stats(interval, progress_total_lines);
     run_in_parallel(input_tasks, threads, [&](FileTask const &task) {
         source source(task.path, loader);
         char *lineptr = NULL;
@@ -315,7 +332,7 @@ int main (int argc, char *argv[]) {
         }
         std::sort(lines.begin(), lines.end());
         async_sink sink(task.path.native(), reducer);
-        for (auto &p: lines) {
+        for (auto &p: lines){
             auto [dummy, lineptr, len] = p;
             sink.write(lineptr, len);
             free(lineptr);
